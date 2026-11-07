@@ -10,7 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // TODO(dat): DAT SDK の配布リポジトリは公式ガイドで確認して追加する
+        // DAT SDK 1.0.1 は Maven Central（com.meta.wearable）で配布。追加リポジトリ不要。
     }
 }
 

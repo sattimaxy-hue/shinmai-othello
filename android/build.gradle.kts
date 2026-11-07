@@ -1,6 +1,6 @@
-// ルートプロジェクト。プラグインバージョンは目安なので、
-// Android Studio の現行安定版に合わせて着手時に確認・更新すること。
+// ルートプロジェクト。プラグイン版数は公式DATサンプル（AGP 8.11.1 / Kotlin 2.2.21）に一致。
+// Gradle ラッパーは同梱していないため、Android Studio で開いて生成させること。
 plugins {
-    id("com.android.application") version "8.13.0" apply false
-    id("org.jetbrains.kotlin.android") version "2.2.0" apply false
+    id("com.android.application") version "8.11.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.2.21" apply false
 }
