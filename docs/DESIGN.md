@@ -108,3 +108,24 @@ samples/CameraAccess・DisplayAccess）で API を確認してから実装した
 - 変化検知→静止画→認識→修正→助言→HUD の骨格はそのまま使う。
 - 変わるのは認識対象（カードの数字・色）とエンジン（合法手列挙＋評価関数）と
   HUD の情報量。オセロで詰めた「確信度と修正フロー」「助言の鮮度管理」が効く。
+
+## 9. Even G2 版メモ（2026-11-07、SDK 0.0.16 / 公式ドキュメント確認済み）
+
+- G2 はカメラなし。撮影は Even アプリ内 WebView からブリッジ API
+  `captureImageFromCamera()` / `pickImageFromAlbum()` でスマホ側カメラ/アルバムを使い、
+  結果は base64 で返る（app.json に camera / album 権限が必須）。
+- 表示は 576×288 キャンバスへのコンテナ合成。画像コンテナは最大 288×144 のため、
+  盤面 288×288 を上下2枚の画像コンテナで送る。画像データはグレースケール bytes を
+  `updateImageRawData` で送信（呼び出しは直列化、1回ごとに画像パスを 100ms 占有）。
+- イベント受け口は isEventCapture: 1 のテキストコンテナが1つだけ。
+  CLICK は eventType が undefined に化ける場合があるため、そのケースもクリック扱いにする。
+- 終了は個人用ビルドでは `shutDownPageContainer(0)`。ストア提出時はルートで
+  `shutDownPageContainer(1)` が必須だが、1 の確認ダイアログ表示後はそのセッションで
+  updateImageRawData が sendFailed になる既知不具合（公式リポジトリ issue #18）がある。
+- 配布は .ehpk: `evenhub pack app.json <dist> -o app.ehpk` → `evenhub create/upload`。
+  開発中は `evenhub qr --url http://<LAN IP>:5173` で QR サイドロード（開発者モード必須、
+  Even アプリを背面化すると切れる）。ビルド成果物のホスティング自体は不要。
+- ソースは eveng2-src/（Vite + TypeScript）、成果物は eveng2/（GitHub Pages でも配信し、
+  シミュレータ確認に使う）。
+- 未検証: 実機での画像 bytes の解釈（1px=1byte 前提）、ブリッジ経由カメラの画質と認識率、
+  スクロール方向と候補切替の対応感。
