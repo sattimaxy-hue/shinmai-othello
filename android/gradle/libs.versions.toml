@@ -1,0 +1,16 @@
+[versions]
+# 公式サンプル（meta/meta-wearables-dat-android, samples/CameraAccess・DisplayAccess）に一致させた値。
+agp = "8.11.1"
+kotlin = "2.2.21"
+mwdat = "1.0.1"
+# サンプルは coroutines を推移依存に任せているが、本プロジェクトは明示する（要ビルド確認）。
+coroutines = "1.9.0"
+junit = "4.13.2"
+
+[libraries]
+mwdat-core = { group = "com.meta.wearable", name = "mwdat-core", version.ref = "mwdat" }
+mwdat-camera = { group = "com.meta.wearable", name = "mwdat-camera", version.ref = "mwdat" }
+mwdat-display = { group = "com.meta.wearable", name = "mwdat-display", version.ref = "mwdat" }
+mwdat-mockdevice = { group = "com.meta.wearable", name = "mwdat-mockdevice", version.ref = "mwdat" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
