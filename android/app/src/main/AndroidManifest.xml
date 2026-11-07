@@ -1,20 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- DAT のセッション確立に Bluetooth が要る（公式ガイド参照）。
-         カメラ権限はグラス側の許可フロー（Meta AI アプリ）で別途求める。 -->
+    <!-- DAT の最小権限セット（公式ガイド Step 2: BLUETOOTH / BLUETOOTH_CONNECT / INTERNET）。
+         グラスのカメラ権限は Android 権限とは別に、Meta AI アプリ経由の
+         DAT パーミッション（Permission.CAMERA）で許可する。 -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:label="新米オセロ・アドバイザー"
         android:theme="@android:style/Theme.Material.Light">
+
+        <!-- Meta Wearables Device Access Toolkit Setup（公式サンプルと同名のメタデータ） -->
+        <meta-data
+            android:name="com.meta.wearable.mwdat.APPLICATION_ID"
+            android:value="${mwdat_application_id}" />
+        <meta-data
+            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
+            android:value="${mwdat_client_token}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- DAT 登録コールバック用の自アプリスキーム（公式ガイドの前提条件） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="shinmaiothello" />
             </intent-filter>
         </activity>
     </application>
