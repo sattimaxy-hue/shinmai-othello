@@ -16,12 +16,13 @@ Step 0 として、共通パイプライン（撮像→認識→助言→提示�
 │                         写真認識→助言→ミニ盤面HUDプレビューまで一通り動く
 ├── webapp/               グラス実機用 Web Apps 版（600x600 / D-pad操作）
 │                         GitHub Pages で公開し、Meta AI アプリから Web App として登録する
-└── android/              Android コンパニオンアプリ（Kotlin スケルトン）
+└── android/              Android コンパニオンアプリ（DAT 1.0.1 実バインディング）
     └── app/src/main/java/jp/satti/shinmaiothello/
         ├── core/         OthelloEngine（Web版から移植）/ HudModel
         ├── vision/       BoardRecognizer（四隅＋色サンプリング）/ 変化検知
-        ├── dat/          DAT接続の境界インターフェース＋モック（実バインディングは未実装）
-        └── MainActivity.kt  エンジン自己診断を表示するだけの最小画面
+        ├── dat/          GlassesClient 境界＋モック＋DatGlassesClient（実バインディング）
+        ├── hud/          HudRenderer（HudState→600x600画像）
+        └── MainActivity.kt  登録→接続→監視→撮影→認識→HUD送信の開発用画面
 ```
 
 ## 動かし方
@@ -36,8 +37,11 @@ Step 0 として、共通パイプライン（撮像→認識→助言→提示�
 - Web試作: `prototype/index.html` をブラウザで開くだけ（サーバ不要）。
   写真を選んで四隅を合わせると盤面が復元され、「おすすめを聞く」で
   最適手にカーソルが出る。新米HUDプレビュー（ミニ盤面）も付いている。
-- Android: Android Studio で `android/` を開く。現状はスケルトンで、
-  起動すると初期局面の助言計算結果が表示される。
+- Android（DAT版）: Android Studio で `android/` を開く（Gradle ラッパーは
+  同梱していないので Android Studio に生成させる）。前提: Meta AI アプリで
+  対象グラスの開発者モードを有効化し、実機（Android 12+）にインストール。
+  操作は画面のボタン順: 1. 登録（Meta AI 連携）→ 2. 接続して監視開始 →
+  カメラ権限を許可 → 静止検知で自動撮影・認識（手動撮影ボタンもあり）。
   エンジンの単体テストは `app/src/test/` にある。
 
 ## プラットフォームの要点（2026-11-07 調査）
@@ -60,11 +64,15 @@ Step 0 として、共通パイプライン（撮像→認識→助言→提示�
 
 ## ステータス
 
-- グラス版 Web Apps: 実装済み（エンジン・D-pad操作・2段階確定を
-  ローカルでスモークテスト済み）。Pages 公開と実機確認はこれから。
+- グラス版 Web Apps: 実装・公開済み
+  （https://sattimaxy-hue.github.io/shinmai-othello/webapp/）。
+  グラス実機での表示確認はこれから。
+- DAT 実バインディング: 実装済み（SDK 1.0.1、公式サンプルで API 確認のうえ
+  接続・カメラ・撮影・表示を配線。詳細は docs/DESIGN.md §8）。
+  Android Studio でのビルドと実機動作は未検証。
+  四隅キャリブレーションUIは未実装（認識は仮置きの四隅で動作）。
 - Web試作: 動作（エンジンは自動テスト6件合格、透視補正は検証済み）
 - Kotlin エンジン: Web版から移植済み（テストは JUnit 版を用意。実機ビルド未検証）
-- DAT 実バインディング: 未実装。`dat/DatGlassesClient.kt` の TODO から着手する
 
 ## 関連
 
