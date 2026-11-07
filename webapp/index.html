@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="description" content="オセロ助言アプリ for Meta Ray-Ban Display（新米）: ミニ盤面と最適手HUD">
+<!-- Identify your web app as MRBD-compatible -->
+<meta name="mrbd-web-app-capable" content="yes">
+<meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
+<title>新米オセロ・アドバイザー</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #000; }
+  body {
+    width: 600px; height: 600px; overflow: hidden;
+    margin: 0 auto; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    user-select: none; -webkit-user-select: none;
+  }
+  /* ヘッダー 44px */
+  #header {
+    height: 44px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px; font-size: 20px; font-weight: 700;
+  }
+  #turn .discIcon { font-size: 20px; }
+  #score { color: #ffd60a; font-variant-numeric: tabular-nums; }
+  /* 助言バー 76px */
+  #advice {
+    height: 76px; padding: 2px 14px 0;
+    border-top: 1px solid #333; border-bottom: 1px solid #333;
+  }
+  #adviceMain { display: flex; align-items: baseline; gap: 12px; }
+  #bestCoord { font-size: 32px; font-weight: 800; color: #ffd60a; letter-spacing: 1px; }
+  #bestLabel { font-size: 18px; color: #fff; }
+  #alts { font-size: 16px; color: #7dd7ff; margin-left: auto; white-space: nowrap; }
+  #reason { font-size: 17px; color: #e8e8e8; margin-top: 2px; white-space: nowrap; overflow: hidden; }
+  #reason.warn { color: #ff9f0a; font-weight: 700; }
+  /* 盤面 436px: ラベル16 + 8x52=416 + 余白 */
+  #boardWrap { height: 436px; display: flex; align-items: center; justify-content: center; }
+  #board {
+    display: grid;
+    grid-template-columns: 16px repeat(8, 52px);
+    grid-template-rows: 16px repeat(8, 52px);
+  }
+  .lab {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #8e8e93;
+  }
+  .cell {
+    position: relative; background: #06300f;
+    border: 1px solid #1f7a3a;
+  }
+  .cell.legal::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #35c4ff; transform: translate(-50%, -50%); opacity: .85;
+  }
+  .disc {
+    position: absolute; left: 50%; top: 50%;
+    width: 42px; height: 42px; border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .disc.black { background: #151515; border: 2px solid #d9d9d9; }
+  .disc.white { background: #fff; border: 2px solid #fff; }
+  .disc.preview { opacity: .45; }
+  .disc.flipPrev { border-color: #ffd60a; box-shadow: 0 0 0 2px #ffd60a; }
+  .cell.best { box-shadow: inset 0 0 0 3px #ffd60a; }
+  .cell.best::before {
+    content: "▼"; position: absolute; left: 50%; top: -3px;
+    transform: translateX(-50%); color: #ffd60a; font-size: 14px; z-index: 3;
+  }
+  .cell.cursor { box-shadow: inset 0 0 0 3px #00d4ff, inset 0 0 14px rgba(0,212,255,.55); z-index: 2; }
+  .cell.cursor.best { box-shadow: inset 0 0 0 3px #ffd60a, inset 0 0 0 6px #00d4ff; }
+  .cell.last::after {
+    content: ""; position: absolute; right: 3px; bottom: 3px;
+    width: 8px; height: 8px; border-radius: 50%; background: #ff453a; z-index: 3;
+  }
+  .cell.legal.last::after { background: #ff453a; }
+  /* フッター 44px */
+  #footer {
+    height: 44px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px; font-size: 16px; color: #c7c7cc;
+    border-top: 1px solid #333;
+  }
+  #cursorPos { color: #7dd7ff; font-weight: 700; }
+</style>
+</head>
+<body>
+  <div id="header">
+    <div id="turn">● 黒の番</div>
+    <div id="score">黒 2 — 白 2</div>
+  </div>
+  <div id="advice">
+    <div id="adviceMain">
+      <span id="bestLabel">おすすめ</span>
+      <span id="bestCoord">—</span>
+      <span id="alts"></span>
+    </div>
+    <div id="reason">読み込み中…</div>
+  </div>
+  <div id="boardWrap"><div id="board"></div></div>
+  <div id="footer">
+    <span>矢印：移動　Enter：打つ（2回で確定）</span>
+    <span id="cursorPos"></span>
+  </div>
+
+<script>
+// ===== オセロエンジン（prototype/othello.js と同一ロジック） =====
+// オセロ（リバーシ）エンジン＋アドバイザー
+// 盤面: 長さ64の配列。index = row*8 + col（row 0 = 1段目, col 0 = a列）
+// 値: 0 = 空, 1 = 黒, -1 = 白
+(function (global) {
+  "use strict";
+
+  var EMPTY = 0, BLACK = 1, WHITE = -1;
+  var DIRS = [
+    [-1, -1], [-1, 0], [-1, 1],
+    [0, -1],           [0, 1],
+    [1, -1],  [1, 0],  [1, 1]
+  ];
+  var CORNERS = [0, 7, 56, 63];
+  var CORNER_ADJ = {
+    0: [1, 8, 9], 7: [6, 14, 15], 56: [48, 49, 57], 63: [54, 55, 62]
+  };
+  var SQUARE_WEIGHTS = [
+    120, -20,  20,   5,   5,  20, -20, 120,
+    -20, -40,  -5,  -5,  -5,  -5, -40, -20,
+     20,  -5,  15,   3,   3,  15,  -5,  20,
+      5,  -5,   3,   3,   3,   3,  -5,   5,
+      5,  -5,   3,   3,   3,   3,  -5,   5,
+     20,  -5,  15,   3,   3,  15,  -5,  20,
+    -20, -40,  -5,  -5,  -5,  -5, -40, -20,
+    120, -20,  20,   5,   5,  20, -20, 120
+  ];
+
+  function initialBoard() {
+    var b = new Array(64).fill(EMPTY);
+    b[27] = WHITE; b[28] = BLACK;
+    b[35] = BLACK; b[36] = WHITE;
+    return b;
+  }
+
+  function idxToCoord(i) {
+    return "abcdefgh"[i % 8] + String(Math.floor(i / 8) + 1);
+  }
+
+  function flipsFor(board, player, idx) {
+    if (board[idx] !== EMPTY) return [];
+    var r = Math.floor(idx / 8), c = idx % 8;
+    var all = [];
+    for (var d = 0; d < DIRS.length; d++) {
+      var dr = DIRS[d][0], dc = DIRS[d][1];
+      var line = [];
+      var rr = r + dr, cc = c + dc;
+      while (rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && board[rr * 8 + cc] === -player) {
+        line.push(rr * 8 + cc);
+        rr += dr; cc += dc;
+      }
+      if (line.length > 0 && rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && board[rr * 8 + cc] === player) {
+        all = all.concat(line);
+      }
+    }
+    return all;
+  }
+
+  function legalMoves(board, player) {
+    var moves = new Map();
+    for (var i = 0; i < 64; i++) {
+      if (board[i] !== EMPTY) continue;
+      var f = flipsFor(board, player, i);
+      if (f.length > 0) moves.set(i, f);
+    }
+    return moves;
+  }
+
+  function applyMove(board, player, idx, flips) {
+    var next = board.slice();
+    next[idx] = player;
+    var f = flips || flipsFor(board, player, idx);
+    for (var i = 0; i < f.length; i++) next[f[i]] = player;
+    return next;
+  }
+
+  function countDiscs(board) {
+    var black = 0, white = 0, empty = 0;
+    for (var i = 0; i < 64; i++) {
+      if (board[i] === BLACK) black++;
+      else if (board[i] === WHITE) white++;
+      else empty++;
+    }
+    return { black: black, white: white, empty: empty };
+  }
+
+  function evaluate(board, player) {
+    var counts = countDiscs(board);
+    var empties = counts.empty;
+    var myDiscs = player === BLACK ? counts.black : counts.white;
+    var opDiscs = player === BLACK ? counts.white : counts.black;
+    if (empties === 0) return (myDiscs - opDiscs) * 1000;
+
+    var score = 0;
+    var i;
+    for (i = 0; i < CORNERS.length; i++) {
+      var corner = CORNERS[i];
+      if (board[corner] === player) score += 2500;
+      else if (board[corner] === -player) score -= 2500;
+    }
+    for (i = 0; i < 64; i++) {
+      if (board[i] === player) score += SQUARE_WEIGHTS[i];
+      else if (board[i] === -player) score -= SQUARE_WEIGHTS[i];
+    }
+    for (i = 0; i < CORNERS.length; i++) {
+      var cnr = CORNERS[i];
+      if (board[cnr] !== EMPTY) continue;
+      var adj = CORNER_ADJ[cnr];
+      for (var j = 0; j < adj.length; j++) {
+        if (board[adj[j]] === player) score -= 60;
+        else if (board[adj[j]] === -player) score += 60;
+      }
+    }
+    var myMob = legalMoves(board, player).size;
+    var opMob = legalMoves(board, -player).size;
+    score += (myMob - opMob) * 12;
+    if (opMob === 0 && myMob > 0) score += 200;
+    var discWeight = empties > 20 ? 1 : empties > 10 ? 4 : 25;
+    score += (myDiscs - opDiscs) * discWeight;
+    return score;
+  }
+
+  function search(board, player, depth, alpha, beta) {
+    var moves = legalMoves(board, player);
+    var counts = countDiscs(board);
+    if (counts.empty === 0) {
+      var diff = (player === BLACK ? counts.black - counts.white : counts.white - counts.black);
+      return diff * 1000;
+    }
+    if (moves.size === 0) {
+      var oppMoves = legalMoves(board, -player);
+      if (oppMoves.size === 0) {
+        var d2 = (player === BLACK ? counts.black - counts.white : counts.white - counts.black);
+        return d2 * 1000;
+      }
+      if (depth === 0) return evaluate(board, player);
+      return -search(board, -player, depth - 1, -beta, -alpha);
+    }
+    if (depth === 0) return evaluate(board, player);
+    var best = -Infinity;
+    var entries = Array.from(moves.entries());
+    entries.sort(function (a, b) { return SQUARE_WEIGHTS[b[0]] - SQUARE_WEIGHTS[a[0]]; });
+    for (var k = 0; k < entries.length; k++) {
+      var idx = entries[k][0];
+      var next = applyMove(board, player, idx, entries[k][1]);
+      var val = -search(next, -player, depth - 1, -beta, -alpha);
+      if (val > best) best = val;
+      if (best > alpha) alpha = best;
+      if (alpha >= beta) break;
+    }
+    return best;
+  }
+
+  function advise(board, player, opts) {
+    opts = opts || {};
+    var counts = countDiscs(board);
+    var empties = counts.empty;
+    var depth = opts.depth || (empties <= 12 ? empties : 5);
+    var moves = legalMoves(board, player);
+    if (moves.size === 0) {
+      return { pass: true, moves: [], depth: depth, gameOver: legalMoves(board, -player).size === 0, counts: counts };
+    }
+    var results = [];
+    var entries = Array.from(moves.entries());
+    for (var i = 0; i < entries.length; i++) {
+      var idx = entries[i][0], flips = entries[i][1];
+      var next = applyMove(board, player, idx, flips);
+      var score = -search(next, -player, depth - 1, -Infinity, Infinity);
+      results.push(buildAdvice(board, player, idx, flips, next, score));
+    }
+    results.sort(function (a, b) { return b.score - a.score; });
+    return { pass: false, moves: results.slice(0, opts.topN || 3), allCount: results.length, depth: depth, counts: counts };
+  }
+
+  function buildAdvice(board, player, idx, flips, next, score) {
+    var reasons = [];
+    var coord = idxToCoord(idx);
+    reasons.push(flips.length + "枚返せる");
+    if (CORNERS.indexOf(idx) >= 0) reasons.push("角が取れる（最重要）");
+    var riskyCorner = null;
+    for (var i = 0; i < CORNERS.length; i++) {
+      var cnr = CORNERS[i];
+      if (board[cnr] === EMPTY && CORNER_ADJ[cnr].indexOf(idx) >= 0) riskyCorner = cnr;
+    }
+    var oppMoves = legalMoves(next, -player);
+    var oppCorner = null;
+    oppMoves.forEach(function (_, mIdx) {
+      if (CORNERS.indexOf(mIdx) >= 0) oppCorner = mIdx;
+    });
+    if (oppCorner !== null && CORNERS.indexOf(idx) < 0) {
+      reasons.push("注意: 相手に角(" + idxToCoord(oppCorner) + ")を渡す");
+    } else if (riskyCorner !== null) {
+      reasons.push("角の隣なので慎重に（相手が角を狙いやすくなる）");
+    }
+    reasons.push("相手の着手可能は" + oppMoves.size + "手");
+    if (oppMoves.size === 0) reasons.push("相手はパスになる");
+    var myNext = legalMoves(next, player).size;
+    reasons.push("自分の次の候補は" + myNext + "手残る");
+    return { idx: idx, coord: coord, flips: flips.slice(), flipCount: flips.length, score: score, reasons: reasons };
+  }
+
+  var api = {
+    EMPTY: EMPTY, BLACK: BLACK, WHITE: WHITE,
+    initialBoard: initialBoard,
+    idxToCoord: idxToCoord,
+    flipsFor: flipsFor,
+    legalMoves: legalMoves,
+    applyMove: applyMove,
+    countDiscs: countDiscs,
+    evaluate: evaluate,
+    advise: advise
+  };
+
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  global.Othello = api;
+})(typeof window !== "undefined" ? window : globalThis);
+
+// ===== グラス用UI（600x600 / D-pad: 矢印キー + Enter） =====
+(function () {
+  "use strict";
+  var O = window.Othello;
+  var boardEl = document.getElementById("board");
+  var turnEl = document.getElementById("turn");
+  var scoreEl = document.getElementById("score");
+  var bestLabelEl = document.getElementById("bestLabel");
+  var bestCoordEl = document.getElementById("bestCoord");
+  var altsEl = document.getElementById("alts");
+  var reasonEl = document.getElementById("reason");
+  var cursorPosEl = document.getElementById("cursorPos");
+
+  // 盤面DOM構築（ラベル付き9x9グリッド）
+  var cellEls = [];
+  var cornerLab = document.createElement("div"); cornerLab.className = "lab";
+  boardEl.appendChild(cornerLab);
+  for (var c = 0; c < 8; c++) {
+    var cl = document.createElement("div"); cl.className = "lab";
+    cl.textContent = "abcdefgh"[c]; boardEl.appendChild(cl);
+  }
+  for (var r = 0; r < 8; r++) {
+    var rl = document.createElement("div"); rl.className = "lab";
+    rl.textContent = String(r + 1); boardEl.appendChild(rl);
+    for (var cc = 0; cc < 8; cc++) {
+      var cell = document.createElement("div");
+      cell.className = "cell";
+      cell.dataset.idx = String(r * 8 + cc);
+      boardEl.appendChild(cell);
+      cellEls.push(cell);
+    }
+  }
+
+  var board, turn, cursor, advice, pending, lastMove, gameOver, history;
+
+  function reset() {
+    board = O.initialBoard();
+    turn = O.BLACK;
+    cursor = 28; pending = null; lastMove = -1; gameOver = false;
+    history = [];
+    refresh(true);
+  }
+
+  function refresh(moveCursorToBest) {
+    advice = O.advise(board, turn);
+    gameOver = !!(advice.pass && advice.gameOver);
+    if (!advice.pass && moveCursorToBest) cursor = advice.moves[0].idx;
+    render();
+  }
+
+  function render() {
+    var counts = advice.counts;
+    turnEl.textContent = (turn === O.BLACK ? "● 黒の番" : "○ 白の番");
+    scoreEl.textContent = "黒 " + counts.black + " — 白 " + counts.white;
+
+    var legal = O.legalMoves(board, turn);
+    var bestIdx = (!advice.pass && advice.moves.length) ? advice.moves[0].idx : -1;
+    var pendingFlips = (pending !== null) ? O.flipsFor(board, turn, pending) : [];
+
+    for (var i = 0; i < 64; i++) {
+      var el = cellEls[i];
+      var cls = "cell";
+      if (legal.has(i)) cls += " legal";
+      if (i === bestIdx && pending === null) cls += " best";
+      if (i === lastMove) cls += " last";
+      if (i === cursor) cls += " cursor";
+      el.className = cls;
+      var v = board[i];
+      var html = "";
+      if (v !== O.EMPTY) {
+        var dcls = "disc " + (v === O.BLACK ? "black" : "white");
+        if (pendingFlips.indexOf(i) >= 0) dcls += " flipPrev";
+        html = '<div class="' + dcls + '"></div>';
+      } else if (i === pending) {
+        html = '<div class="disc preview ' + (turn === O.BLACK ? "black" : "white") + '"></div>';
+      }
+      if (el._html !== html) { el.innerHTML = html; el._html = html; }
+    }
+
+    if (gameOver) {
+      var res = counts.black > counts.white ? "黒の勝ち" :
+                counts.white > counts.black ? "白の勝ち" : "引き分け";
+      bestLabelEl.textContent = "終局";
+      bestCoordEl.textContent = res;
+      altsEl.textContent = "";
+      reasonEl.textContent = "Enterでもう一局";
+      reasonEl.className = "";
+    } else if (advice.pass) {
+      bestLabelEl.textContent = (turn === O.BLACK ? "黒" : "白") + "は";
+      bestCoordEl.textContent = "パス";
+      altsEl.textContent = "";
+      reasonEl.textContent = "打てる手がない。Enterで相手の番へ";
+      reasonEl.className = "";
+    } else if (pending !== null) {
+      var pm = null;
+      for (var k = 0; k < advice.moves.length; k++) if (advice.moves[k].idx === pending) pm = advice.moves[k];
+      bestLabelEl.textContent = "この手でOK？";
+      bestCoordEl.textContent = O.idxToCoord(pending).toUpperCase();
+      altsEl.textContent = "";
+      reasonEl.textContent = (pm ? pm.flipCount + "枚返る。" : O.flipsFor(board, turn, pending).length + "枚返る。") + "もう一度Enterで確定、矢印で取消";
+      reasonEl.className = "";
+    } else {
+      var top = advice.moves[0];
+      bestLabelEl.textContent = "おすすめ";
+      bestCoordEl.textContent = top.coord.toUpperCase();
+      var altTxt = [];
+      if (advice.moves[1]) altTxt.push("2位 " + advice.moves[1].coord.toUpperCase());
+      if (advice.moves[2]) altTxt.push("3位 " + advice.moves[2].coord.toUpperCase());
+      altsEl.textContent = altTxt.join("　");
+      var warn = top.reasons.some(function (s) { return s.indexOf("注意") === 0; });
+      var oppReason = "";
+      for (var j = 0; j < top.reasons.length; j++) {
+        if (top.reasons[j].indexOf("相手の着手可能") === 0) oppReason = top.reasons[j];
+        if (top.reasons[j].indexOf("注意") === 0) oppReason = top.reasons[j];
+      }
+      reasonEl.textContent = top.reasons[0] + (oppReason ? "／" + oppReason : "");
+      reasonEl.className = warn ? "warn" : "";
+    }
+    cursorPosEl.textContent = "カーソル " + O.idxToCoord(cursor).toUpperCase();
+  }
+
+  function commitMove(idx) {
+    history.push({ board: board.slice(), turn: turn });
+    board = O.applyMove(board, turn, idx);
+    lastMove = idx;
+    turn = -turn;
+    pending = null;
+    refresh(true);
+  }
+
+  function doPass() {
+    history.push({ board: board.slice(), turn: turn });
+    lastMove = -1;
+    turn = -turn;
+    pending = null;
+    refresh(true);
+  }
+
+  function undo() {
+    if (!history.length) return;
+    var prev = history.pop();
+    board = prev.board; turn = prev.turn;
+    pending = null; lastMove = -1;
+    refresh(true);
+  }
+
+  function activate() {
+    if (gameOver) { reset(); return; }
+    if (advice.pass) { doPass(); return; }
+    if (pending !== null && pending === cursor) { commitMove(cursor); return; }
+    var legal = O.legalMoves(board, turn);
+    if (legal.has(cursor)) { pending = cursor; render(); }
+  }
+
+  function moveCursor(dr, dc) {
+    var r = Math.floor(cursor / 8), c = cursor % 8;
+    r = Math.max(0, Math.min(7, r + dr));
+    c = Math.max(0, Math.min(7, c + dc));
+    cursor = r * 8 + c;
+    pending = null;
+    render();
+  }
+
+  document.addEventListener("keydown", function (e) {
+    switch (e.key) {
+      case "ArrowUp": moveCursor(-1, 0); break;
+      case "ArrowDown": moveCursor(1, 0); break;
+      case "ArrowLeft": moveCursor(0, -1); break;
+      case "ArrowRight": moveCursor(0, 1); break;
+      case "Enter": activate(); break;
+      case "u": case "U": undo(); break;
+      default: return;
+    }
+    e.preventDefault();
+  });
+
+  // PC/スマホでの確認用: クリックでも同じ操作
+  boardEl.addEventListener("click", function (e) {
+    var t = e.target.closest(".cell");
+    if (!t) return;
+    var idx = parseInt(t.dataset.idx, 10);
+    if (idx === cursor) { activate(); return; }
+    cursor = idx; pending = null; render();
+  });
+
+  reset();
+})();
+</script>
+</body>
+</html>
