@@ -41,7 +41,8 @@ Web試作では写真の上で四隅をドラッグしたが、グラスでは�
 ## 4. 助言と提示
 
 - エンジン: OthelloEngine（序中盤5手先、空き12以下は全読み）。Web版と同一ロジック。
-- 提示は HudModel を画像化して glasses.display に送る想定。
+- 提示は HudModel を画像化して送る（mwdat-display はコンポーネントDSL のため、
+  画像は image コンポーネントで送る。詳細は §8）。
   - 左: おすすめ座標を大きく（例 f5）
   - 右: ミニ盤面。最適手に▼カーソル＋リング、2位・3位にバッジ
   - 下: 理由を2要素まで
@@ -62,10 +63,45 @@ Web試作では写真の上で四隅をドラッグしたが、グラスでは�
 
 1. [済] Web試作でパイプライン検証（認識・エンジン・HUDモデル）
 2. [済] Kotlin へエンジン／認識／HUDモデルを移植（本リポジトリ）
-3. [次] Android Studio でビルドを通し、単体テストを回す
-4. DAT を組み込み、モック→実グラスのカメラで盤面認識を通す
-5. 表示: HudState の画像化と glasses.display への送信を通す
-6. 実盤・実卓で1ゲーム通し検証（認識率、助言レイテンシ、電池の持ち）
+3. [済] グラス版 Web Apps（webapp/）を実装・公開（D-pad操作の手入力式）
+4. [済] DAT 実バインディング実装（下記 §8。コードのみ・実機ビルド未検証）
+5. [次] Android Studio でビルドを通し、単体テストを回す
+6. 実グラスのカメラで盤面認識を通す（四隅キャリブレーションUIが前提）
+7. 実盤・実卓で1ゲーム通し検証（認識率、助言レイテンシ、電池の持ち）
+
+## 8. DAT 実装メモ（2026-11-07、SDK 1.0.1）
+
+公式リポジトリ meta/meta-wearables-dat-android（AGENTS.md と
+samples/CameraAccess・DisplayAccess）で API を確認してから実装した。
+
+- 依存: Maven Central の com.meta.wearable（mwdat-core / mwdat-camera /
+  mwdat-display / mwdat-mockdevice）すべて 1.0.1。追加リポジトリ不要。
+- ビルド要件はサンプルに一致: compileSdk/targetSdk 36、minSdk 31、
+  AGP 8.11.1、Kotlin 2.2.21、JVM 17。
+- マニフェスト: meta-data APPLICATION_ID / CLIENT_TOKEN は開発者モード用に
+  プレースホルダ "0"。権限は BLUETOOTH / BLUETOOTH_CONNECT / INTERNET。
+  登録コールバック用に自アプリスキーム shinmaiothello の VIEW フィルタを追加。
+- 接続: Wearables.initialize → startRegistration（Meta AI 連携）→
+  createSession（表示対応デバイスに絞る AutoDeviceSelector）→
+  state が STARTED になってから addDisplay / addCamera。
+- カメラ権限は DAT パーミッション（Permission.CAMERA）で、リクエストは
+  Wearables.RequestPermissionContract を Activity から使う。
+  ストリームは MEDIUM(504x896) / 2fps / 非圧縮。静止画は stream.capturePhoto()
+  （PhotoData は Bitmap か HEIC。HEIC は EXIF の向きを適用してから使う）。
+- 表示: mwdat-display は生フレームバッファではなくコンポーネントDSL
+  （sendContent { flexBox { ... } }）。HUD は HudRenderer で 600x600 画像にし、
+  image コンポーネント（ImageSize.FILL）で送る。ネイティブコンポーネントで
+  盤面を組む案は将来の改善（画像より鮮明になる可能性がある）。
+- 未検証の前提: 非圧縮 VideoFrame.buffer のレイアウトは公式に明記がなく、
+  「YUV で先頭が輝度プレーン」と仮定して変化検知に使っている。
+  実機で違えば変化検知のみ差し替える（写真→Bitmap 経由の認識は無事）。
+- 検証状況: Android SDK のない環境で、調査済みAPIに基づくスタブに対して
+  全 Kotlin ソースのコンパイルを通した（構文・型整合の確認）。
+  実SDKでのビルド可否と実機動作は未検証であり、次のマイルストーン。
+- 当面の割り切り: 四隅キャリブレーションUIは未実装で、認識時は写真の
+  内側6%を四隅とする仮置き。手番は認識ごとに交互の簡易管理
+  （パス時は MainActivity の「手番を切替」ボタンで手動調整）。
+- Gradle ラッパーは同梱していない。Android Studio で開いて生成させる。
 
 ## 7. 本編（Splendor）への引き継ぎ
 
