@@ -1,1 +1,339 @@
-<!-- placeholder -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>SCOUTER — 戦闘力測定プロトタイプ</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#02120a; font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP",monospace,sans-serif; }
+  #stage { position:fixed; inset:0; overflow:hidden; background:#000; }
+  video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  canvas#fx { position:absolute; inset:0; width:100%; height:100%; }
+  /* スカウター風の緑がかったレンズ＋走査線 */
+  #lens { position:absolute; inset:0; pointer-events:none;
+    background:
+      radial-gradient(ellipse at center, rgba(64,255,170,0.05) 0%, rgba(0,40,20,0.28) 78%, rgba(0,20,10,0.55) 100%);
+    mix-blend-mode:normal; }
+  #lens::after { content:""; position:absolute; inset:0;
+    background:repeating-linear-gradient(0deg, rgba(120,255,190,0.045) 0 1px, transparent 1px 3px); }
+  .hud { position:absolute; color:#5cffbe; text-shadow:0 0 6px rgba(92,255,190,.8), 0 0 2px rgba(92,255,190,.9);
+    letter-spacing:.12em; pointer-events:none; z-index:5; }
+  #hud-top { top:calc(10px + env(safe-area-inset-top)); left:14px; font-size:13px; line-height:1.7; }
+  #hud-top .big { font-size:17px; font-weight:700; }
+  #hud-bottom { bottom:calc(86px + env(safe-area-inset-bottom)); left:0; right:0; text-align:center; font-size:12px; opacity:.85; }
+  #frame { position:absolute; inset:10px; border:1px solid rgba(92,255,190,.35); pointer-events:none; z-index:4; }
+  #frame::before, #frame::after { content:""; position:absolute; width:26px; height:26px; border:2px solid #5cffbe; }
+  #frame::before { top:-2px; left:-2px; border-right:none; border-bottom:none; }
+  #frame::after { bottom:-2px; right:-2px; border-left:none; border-top:none; }
+  /* コントロール */
+  #controls { position:absolute; left:0; right:0; bottom:calc(14px + env(safe-area-inset-bottom)); display:flex; gap:10px; justify-content:center; z-index:10; }
+  button { appearance:none; border:1px solid #5cffbe; color:#5cffbe; background:rgba(2,30,16,.72);
+    padding:11px 18px; font-size:14px; letter-spacing:.1em; border-radius:6px; cursor:pointer; font-family:inherit; }
+  button:active { background:rgba(92,255,190,.25); }
+  button[disabled] { opacity:.4; }
+  /* 起動オーバーレイ */
+  #start { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+    background:radial-gradient(ellipse at center, rgba(3,40,22,.88), rgba(1,14,7,.96)); color:#5cffbe; text-align:center; padding:24px; }
+  #start h1 { font-size:30px; letter-spacing:.35em; text-shadow:0 0 12px rgba(92,255,190,.8); }
+  #start p { font-size:13px; line-height:2; opacity:.9; max-width:420px; }
+  #startBtn { font-size:17px; padding:14px 34px; }
+  #err { color:#ff9c9c; font-size:12px; min-height:1.5em; line-height:1.6; max-width:420px; }
+  /* ヒビ割れ */
+  #crack { position:absolute; inset:0; z-index:8; pointer-events:none; opacity:0; transition:opacity .12s; }
+  #crack.on { opacity:1; }
+  #flash { position:absolute; inset:0; z-index:7; pointer-events:none; background:#fff; opacity:0; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="fx"></canvas>
+  <div id="lens"></div>
+  <div id="frame"></div>
+
+  <!-- ヒビ割れSVG（演出用・オリジナル描画） -->
+  <svg id="crack" viewBox="0 0 100 100" preserveAspectRatio="none">
+    <g stroke="#eafff4" stroke-width="0.55" fill="none" opacity="0.9">
+      <path d="M50 42 L44 30 L46 18 L40 6"/>
+      <path d="M50 42 L60 32 L74 30 L88 20"/>
+      <path d="M50 42 L58 52 L60 68 L66 84"/>
+      <path d="M50 42 L40 50 L26 54 L12 66"/>
+      <path d="M50 42 L48 58 L42 74 L44 92"/>
+      <path d="M50 42 L64 44 L80 48 L96 46"/>
+      <path d="M44 30 L34 26 L24 30"/>
+      <path d="M60 32 L62 20 L56 10"/>
+      <path d="M40 50 L36 62 L26 70"/>
+      <path d="M58 52 L70 58 L82 56"/>
+    </g>
+    <circle cx="50" cy="42" r="2.2" fill="none" stroke="#eafff4" stroke-width="0.5"/>
+  </svg>
+  <div id="flash"></div>
+
+  <div class="hud" id="hud-top">
+    <div class="big">SCOUTER&nbsp;OS</div>
+    <div id="hud-status">STANDBY</div>
+  </div>
+  <div class="hud" id="hud-bottom">顔を向けると自動で測定を開始します</div>
+
+  <div id="controls" class="hidden">
+    <button id="flipBtn">カメラ切替</button>
+    <button id="soundBtn">音：ON</button>
+  </div>
+
+  <div id="start">
+    <h1>SCOUTER</h1>
+    <p>戦闘力測定プロトタイプ（ファンメイド）<br>
+    カメラに映った顔を自動で検出して、戦闘力を測定します。<br>
+    映像はこの端末の中だけで処理され、外部に送信されません。</p>
+    <button id="startBtn">スカウト開始</button>
+    <div id="err"></div>
+  </div>
+</div>
+
+<script type="module">
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+const WASM_URL  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+
+const video   = document.getElementById('cam');
+const canvas  = document.getElementById('fx');
+const ctx     = canvas.getContext('2d');
+const statusEl= document.getElementById('hud-status');
+const errEl   = document.getElementById('err');
+const crackEl = document.getElementById('crack');
+const flashEl = document.getElementById('flash');
+
+let detector = null;
+let stream = null;
+let facing = 'environment';   // 既定は背面カメラ（相手を測る）
+let soundOn = true;
+let running = false;
+let lastVideoTime = -1;
+
+/* ---------- 音（WebAudioで電子音を合成） ---------- */
+let actx = null;
+function audio() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+function beep(freq = 1560, dur = 0.045, type = 'square', gain = 0.045, when = 0) {
+  if (!soundOn) return;
+  try {
+    const a = audio(), t = a.currentTime + when;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  } catch(e) {}
+}
+function lockSound() { beep(1180, .07, 'square', .05); beep(1760, .12, 'square', .05, .07); }
+function crashSound() {
+  if (!soundOn) return;
+  try {
+    const a = audio(), t = a.currentTime;
+    const len = a.sampleRate * 0.35, buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = a.createBufferSource(); src.buffer = buf;
+    const f = a.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 900;
+    const g = a.createGain(); g.gain.value = 0.22;
+    src.connect(f).connect(g).connect(a.destination); src.start(t);
+    beep(220, .3, 'sawtooth', .06, 0);
+  } catch(e) {}
+}
+
+/* ---------- 戦闘力の生成 ---------- */
+function rollPower() {
+  const r = Math.random();
+  if (r < 0.02) return 100000 + Math.floor(Math.random() * 500000);      // 2%：危険域（オーバーロード）
+  if (r < 0.14) return 10000 + Math.floor(Math.random() * 40000);       // 12%：エリート
+  if (r < 0.45) return 1000 + Math.floor(Math.random() * 9000);         // 31%：戦士
+  return 5 + Math.floor(Math.random() * 995);                           // 55%：一般
+}
+function rankOf(p) {
+  if (p >= 100000) return 'DANGER';
+  if (p >= 10000)  return 'ELITE';
+  if (p >= 1000)   return 'WARRIOR';
+  return 'NORMAL';
+}
+
+/* ---------- 顔トラッキング ---------- */
+let tracks = [];   // {id, cx, cy, w, h, born, target, locked, lastSeen, lastBeep, broken}
+let nextId = 1;
+
+function updateTracks(detections, now) {
+  const used = new Set();
+  for (const det of detections) {
+    const b = det.boundingBox;
+    const cx = b.originX + b.width / 2, cy = b.originY + b.height / 2;
+    let best = null, bestD = 1e18;
+    for (const t of tracks) {
+      if (used.has(t.id)) continue;
+      const d = (t.cx - cx) ** 2 + (t.cy - cy) ** 2;
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    const thresh = Math.max(60, b.width * 1.2) ** 2;
+    if (best && bestD < thresh) {
+      best.cx = cx; best.cy = cy; best.w = b.width; best.h = b.height; best.lastSeen = now;
+      used.add(best.id);
+    } else {
+      const t = { id: nextId++, cx, cy, w: b.width, h: b.height, born: now,
+                  target: rollPower(), locked: false, lastSeen: now, lastBeep: 0, broken: false };
+      tracks.push(t); used.add(t.id);
+    }
+  }
+  tracks = tracks.filter(t => now - t.lastSeen < 1400);
+  // 測定進行と音
+  for (const t of tracks) {
+    const age = now - t.born;
+    if (!t.locked && age > 1250) {
+      t.locked = true;
+      if (t.target >= 100000 && !t.broken) { t.broken = true; overload(); }
+      else lockSound();
+    } else if (!t.locked && now - t.lastBeep > 95) {
+      t.lastBeep = now;
+      beep(1350 + Math.min(age / 1250, 1) * 500, .035, 'square', .035);
+    }
+  }
+}
+
+let crackTimer = null;
+function overload() {
+  crashSound();
+  flashEl.style.transition = 'none'; flashEl.style.opacity = '0.85';
+  requestAnimationFrame(() => { flashEl.style.transition = 'opacity .45s'; flashEl.style.opacity = '0'; });
+  crackEl.classList.add('on');
+  clearTimeout(crackTimer);
+  crackTimer = setTimeout(() => crackEl.classList.remove('on'), 2600);
+}
+
+/* ---------- 描画 ---------- */
+function coverTransform() {
+  const cw = canvas.width, ch = canvas.height;
+  const vw = video.videoWidth || cw, vh = video.videoHeight || ch;
+  const scale = Math.max(cw / vw, ch / vh);
+  return { scale, ox: (cw - vw * scale) / 2, oy: (ch - vh * scale) / 2 };
+}
+function draw(now) {
+  const { scale, ox, oy } = coverTransform();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const anyScanning = tracks.some(t => !t.locked);
+  statusEl.textContent = tracks.length === 0 ? 'SEARCHING…' :
+    anyScanning ? 'MEASURING…' : 'LOCK ON × ' + tracks.length;
+
+  for (const t of tracks) {
+    const x = ox + (t.cx - t.w / 2) * scale, y = oy + (t.cy - t.h / 2) * scale;
+    const w = t.w * scale, h = t.h * scale;
+    const pad = Math.max(10, w * 0.12);
+    const X = x - pad, Y = y - pad, W = w + pad * 2, H = h + pad * 2;
+    const col = t.broken ? '#ff5c5c' : '#5cffbe';
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.shadowColor = col; ctx.shadowBlur = 8;
+    // 四隅ブラケット
+    const L = Math.min(26, W * 0.22);
+    ctx.beginPath();
+    ctx.moveTo(X, Y + L); ctx.lineTo(X, Y); ctx.lineTo(X + L, Y);
+    ctx.moveTo(X + W - L, Y); ctx.lineTo(X + W, Y); ctx.lineTo(X + W, Y + L);
+    ctx.moveTo(X + W, Y + H - L); ctx.lineTo(X + W, Y + H); ctx.lineTo(X + W - L, Y + H);
+    ctx.moveTo(X + L, Y + H); ctx.lineTo(X, Y + H); ctx.lineTo(X, Y + H - L);
+    ctx.stroke();
+    // 中心照準
+    const cxp = X + W / 2, cyp = Y + H / 2, r = Math.min(W, H) * 0.16;
+    ctx.beginPath(); ctx.arc(cxp, cyp, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cxp - r - 7, cyp); ctx.lineTo(cxp - r + 3, cyp);
+    ctx.moveTo(cxp + r - 3, cyp); ctx.lineTo(cxp + r + 7, cyp);
+    ctx.moveTo(cxp, cyp - r - 7); ctx.lineTo(cxp, cyp - r + 3);
+    ctx.moveTo(cxp, cyp + r - 3); ctx.lineTo(cxp, cyp + r + 7);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // 数値表示
+    const age = now - t.born;
+    let disp;
+    if (!t.locked) {
+      const p = Math.min(age / 1250, 1);
+      const eased = t.target * (1 - Math.pow(1 - p, 3));
+      disp = Math.floor(eased + (Math.random() - 0.5) * t.target * 0.06);
+      if (disp < 0) disp = 0;
+    } else disp = t.target;
+
+    ctx.font = '700 15px monospace'; ctx.fillStyle = col;
+    ctx.fillText('POWER', X, Y - 34);
+    ctx.font = '700 30px monospace';
+    ctx.fillText(t.broken ? 'ERROR' : disp.toLocaleString('en-US'), X, Y - 6);
+    ctx.font = '12px monospace';
+    ctx.fillText(t.locked ? ('RANK: ' + rankOf(t.target) + (t.broken ? ' — 測定不能' : '')) : 'MEASURING…', X, Y + H + 18);
+  }
+}
+
+/* ---------- メインループ ---------- */
+function loop() {
+  if (!running) return;
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    try {
+      const res = detector.detectForVideo(video, performance.now());
+      updateTracks(res.detections || [], performance.now());
+    } catch(e) { /* フレーム単位の失敗は読み飛ばす */ }
+  }
+  draw(performance.now());
+  requestAnimationFrame(loop);
+}
+
+function fitCanvas() {
+  canvas.width = window.innerWidth * (window.devicePixelRatio > 1 ? 1.5 : 1);
+  canvas.height = window.innerHeight * (window.devicePixelRatio > 1 ? 1.5 : 1);
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+}
+
+document.getElementById('startBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true; errEl.textContent = '読み込み中…（初回は顔検出モデルを取得します）';
+  try {
+    audio(); // ユーザー操作の中でAudioContextを解放
+    const { FaceDetector, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+    const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+    detector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+      runningMode: 'VIDEO',
+      minDetectionConfidence: 0.5
+    });
+    await startCamera();
+    document.getElementById('start').classList.add('hidden');
+    document.getElementById('controls').classList.remove('hidden');
+    running = true;
+    loop();
+  } catch (e) {
+    console.error(e);
+    errEl.textContent = '起動できませんでした。カメラの許可、HTTPS接続、対応ブラウザ（Chrome / Safari最新版）を確認してください。' + (e && e.message ? '（' + e.message + '）' : '');
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('flipBtn').addEventListener('click', async () => {
+  facing = (facing === 'environment') ? 'user' : 'environment';
+  tracks = [];
+  try { await startCamera(); } catch(e) {}
+});
+document.getElementById('soundBtn').addEventListener('click', (ev) => {
+  soundOn = !soundOn;
+  ev.target.textContent = soundOn ? '音：ON' : '音：OFF';
+});
+</script>
+</body>
+</html>
