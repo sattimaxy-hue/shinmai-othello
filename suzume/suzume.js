@@ -127,6 +127,7 @@
       if (yakuman) {
         total = base + yakuman.points;
       } else {
+        // 赤とドラは重複して数える（赤いドラは1枚で2点）
         if (result.redCount) bonuses.push({ name: "赤牌×" + result.redCount, points: result.redCount });
         if (result.doraCount) bonuses.push({ name: "ドラ×" + result.doraCount, points: result.doraCount });
         if (tanyao) bonuses.push({ name: "タンヤオ", points: 1 });
@@ -161,8 +162,10 @@
     return rem;
   }
   function redRemaining(handTiles, opts, t) {
-    // そのタイプの赤がまだ見えていないか（数牌のみ）
+    // そのタイプの赤がまだ場に残っているか（数牌のみ）
     if (!isNumber(t)) return false;
+    // ドラ表示牌が赤だった場合、その赤は表示牌として消費済み（表示牌は表向きなので見て分かる）
+    if (opts && opts.dora === t && opts.doraRed) return false;
     var seen = handTiles.concat((opts && opts.visible) || []);
     return !seen.some(function (x) { return x.t === t && x.red; });
   }

@@ -75,10 +75,11 @@
 
   <section>
     <h2>1. 設定（ドラ表示牌・親）</h2>
-    <p class="note">ドラは「表示牌そのもの」がドラになる（一般の麻雀と違う）よ。親がアガると +2 点（ただし5点条件には含まない）。</p>
+    <p class="note">ドラは「表示牌そのもの」がドラになる（一般の麻雀と違う）よ。表示牌が赤牌のこともあるから、その場合は下の「表示牌が赤」にもチェック（その赤は場に残らない）。手牌の赤いドラは赤+ドラで1枚2点。親がアガると +2 点（ただし5点条件には含まない）。</p>
     <div class="row" id="doraPalette"></div>
     <div class="row" style="margin-top:8px">
       <label><input type="checkbox" id="dealerChk"> 自分が親（+2点）</label>
+      <label><input type="checkbox" id="doraRedChk" disabled> 表示牌が赤</label>
       <span class="note" id="doraLabel">ドラ: 未設定</span>
     </div>
   </section>
@@ -134,7 +135,7 @@
       ② 「形は完成するけど点数不足」の待ちをアガリ待ちと区別して出すこと　
       ③ 残り枚数（手牌＋ドラ表示を差し引く）とフリテンの警告　
       ④ 6枚時の捨て牌ランキング（テンパイ化＞待ち枚数＞見込める点数）。<br>
-      ルール根拠と未確認点は DESIGN.md に記録。エンジンは自動テスト14件合格済み。カメラ認識は AURA 実機到着後のフェーズ（設計のみ）。
+      ルール根拠と未確認点は DESIGN.md に記録。エンジンは自動テスト16件合格済み。カメラ認識は AURA 実機到着後のフェーズ（設計のみ）。
     </p>
   </section>
 </main>
@@ -153,6 +154,7 @@
   function opts() {
     return {
       dora: dora,
+      doraRed: !!dora && Suzume.isNumber(dora) && document.getElementById("doraRedChk").checked,
       dealer: document.getElementById("dealerChk").checked,
       ownDiscards: ownDiscards.slice()
     };
@@ -259,8 +261,12 @@
       wrap.appendChild(el);
       dc.appendChild(wrap);
     });
-    document.getElementById("doraLabel").textContent = "ドラ: " + (dora ? Suzume.typeLabel(dora) : "未設定");
-    document.getElementById("hudDora").textContent = "ドラ " + (dora ? Suzume.typeLabel(dora) : "—");
+    var doraRedChk = document.getElementById("doraRedChk");
+    doraRedChk.disabled = !(dora && Suzume.isNumber(dora));
+    if (doraRedChk.disabled) doraRedChk.checked = false;
+    var doraText = dora ? (doraRedChk.checked && Suzume.isNumber(dora) ? "赤" + Suzume.typeLabel(dora) : Suzume.typeLabel(dora)) : null;
+    document.getElementById("doraLabel").textContent = "ドラ: " + (doraText || "未設定");
+    document.getElementById("hudDora").textContent = "ドラ " + (doraText || "—");
     // 自分の捨て牌
     var chips = document.getElementById("ownDiscardChips");
     chips.innerHTML = "";
@@ -297,6 +303,7 @@
     renderAll();
   });
   document.getElementById("dealerChk").addEventListener("change", function () { lastAdvice = null; });
+  document.getElementById("doraRedChk").addEventListener("change", function () { lastAdvice = null; renderPalettes(); });
 
   function scoreBreakdownHtml(sc) {
     var parts = [];
