@@ -97,10 +97,27 @@
   </section>
 
   <section>
-    <h2>3. 自分の捨て牌（フリテン確認用・任意）</h2>
-    <div class="row" id="ownDiscardChips"><span class="note">なし</span></div>
+    <h2>3. 場を見る（カメラ＋捨て牌入力 → 危険牌予測）</h2>
+    <p class="note">場の写真を撮って見ながら、各プレイヤーの捨て牌を入力するのが今の現実解だよ（牌の自動認識は軍曹の実機フェーズで検証）。捨て牌が入ると、6枚時の助言に「その牌を切るとロンされる確率」の予測が付く。</p>
+    <div class="row">
+      <label>プレイヤー数
+        <select id="playerCountSel">
+          <option value="2">2人</option>
+          <option value="3">3人</option>
+          <option value="4" selected>4人</option>
+          <option value="5">5人</option>
+        </select>
+      </label>
+      <input type="file" id="fieldPhotoInput" accept="image/*" capture="environment">
+    </div>
+    <div id="fieldPhotoWrap" style="display:none; margin-top:8px">
+      <img id="fieldPhotoImg" alt="場の写真" style="width:100%; border-radius:8px">
+      <div class="note">この写真を見ながら、下で捨て牌を入力してね。写真から牌を自動で読む処理はまだ入っていない（正直ベース）。</div>
+    </div>
+    <div class="row" id="targetChips" style="margin-top:10px"></div>
     <div class="palette" id="discardPalette" style="margin-top:8px"></div>
-    <p class="note">自分が一度捨てた牌ではロンできない。待ちがフリテンに当たると助言で警告するよ。</p>
+    <div id="discardLists" style="margin-top:8px"></div>
+    <p class="note">自分が一度捨てた牌ではロンできない（フリテン）。相手が捨てた牌は、その相手には確実に安全。危険度は「見えている牌を全部差し引いた山から相手の手を推定する」モンテカルロ計算で、相手の打ち筋までは読まない近似だよ。</p>
   </section>
 
   <section>
@@ -134,8 +151,9 @@
       ① すずめ雀の得点計算（順子1点／刻子2点／赤・ドラ各1点／タンヤオ1点／チャンタ2点／役満3種、5点以上でアガリ、親+2は条件外）　
       ② 「形は完成するけど点数不足」の待ちをアガリ待ちと区別して出すこと　
       ③ 残り枚数（手牌＋ドラ表示を差し引く）とフリテンの警告　
-      ④ 6枚時の捨て牌ランキング（テンパイ化＞待ち枚数＞見込める点数）。<br>
-      ルール根拠と未確認点は DESIGN.md に記録。エンジンは自動テスト16件合格済み。カメラ認識は AURA 実機到着後のフェーズ（設計のみ）。
+      ④ 6枚時の捨て牌ランキング（テンパイ化＞待ち枚数＞見込める点数）　
+      ⑤ 危険牌予測: 場の見え牌を差し引いた山から相手の手をサンプリング推定し、ロン確率と想定損失を表示。相手が捨てた牌はその相手に確定安全（フリテン）。<br>
+      ルール根拠と未確認点は DESIGN.md に記録。エンジンは自動テスト20件合格済み。カメラ認識は AURA 実機到着後のフェーズ（設計のみ）。
     </p>
   </section>
 </main>
@@ -267,30 +285,81 @@
     var doraText = dora ? (doraRedChk.checked && Suzume.isNumber(dora) ? "赤" + Suzume.typeLabel(dora) : Suzume.typeLabel(dora)) : null;
     document.getElementById("doraLabel").textContent = "ドラ: " + (doraText || "未設定");
     document.getElementById("hudDora").textContent = "ドラ " + (doraText || "—");
-    // 自分の捨て牌
-    var chips = document.getElementById("ownDiscardChips");
-    chips.innerHTML = "";
-    if (ownDiscards.length === 0) chips.innerHTML = '<span class="note">なし</span>';
-    ownDiscards.forEach(function (t, i) {
-      var chip = document.createElement("span");
-      chip.className = "chip";
-      chip.appendChild(tileEl(Suzume.makeTile(t, false), true));
-      var x = document.createElement("span");
-      x.textContent = Suzume.typeLabel(t) + " ✕";
-      chip.appendChild(x);
-      chip.addEventListener("click", function () { ownDiscards.splice(i, 1); renderAll(); });
-      chips.appendChild(chip);
+    renderField();
+  }
+
+  // ---------- 場の入力（捨て牌トラッキング） ----------
+  var oppDiscards = [[], [], [], []];   // 相手A〜Dの捨て牌（タイプ配列、同じ牌を複数回捨てることもあるので重複可）
+  var fieldTarget = "self";             // 入力先: "self" or 0..3
+  var OPP_NAMES = ["相手A", "相手B", "相手C", "相手D"];
+
+  function playerCount() { return parseInt(document.getElementById("playerCountSel").value, 10); }
+  function opponentsState() {
+    var out = [];
+    for (var i = 0; i < playerCount() - 1; i++) out.push({ name: OPP_NAMES[i], discards: oppDiscards[i].slice() });
+    return out;
+  }
+  function currentTargetList() {
+    return fieldTarget === "self" ? ownDiscards : oppDiscards[fieldTarget];
+  }
+
+  function renderField() {
+    // 入力先チップ
+    var tc = document.getElementById("targetChips");
+    tc.innerHTML = "";
+    var targets = [{ key: "self", label: "自分の捨て牌" }];
+    for (var i = 0; i < playerCount() - 1; i++) targets.push({ key: i, label: OPP_NAMES[i] });
+    if (fieldTarget !== "self" && fieldTarget >= playerCount() - 1) fieldTarget = "self";
+    targets.forEach(function (tg) {
+      var b = document.createElement("button");
+      b.textContent = tg.label;
+      if (String(fieldTarget) === String(tg.key)) b.classList.add("sel");
+      b.addEventListener("click", function () { fieldTarget = tg.key; renderField(); });
+      tc.appendChild(b);
     });
+    // 捨て牌パレット（選択中の入力先に追加。自分は同じ牌種1回まで、相手は重複可）
     var dp = document.getElementById("discardPalette");
     dp.innerHTML = "";
+    var list = currentTargetList();
     Suzume.TYPES.forEach(function (t) {
       var b = document.createElement("button");
       if (t === "H") b.className = "honH";
       if (t === "C") b.className = "honC";
       b.innerHTML = '<span class="big">' + Suzume.typeLabel(t) + '</span><span class="small">捨てた</span>';
-      b.disabled = ownDiscards.indexOf(t) >= 0;
-      b.addEventListener("click", function () { ownDiscards.push(t); renderAll(); });
+      if (fieldTarget === "self" && ownDiscards.indexOf(t) >= 0) b.disabled = true;
+      b.addEventListener("click", function () { currentTargetList().push(t); lastAdvice = null; renderField(); });
       dp.appendChild(b);
+    });
+    // 各プレイヤーの捨て牌リスト
+    var dl = document.getElementById("discardLists");
+    dl.innerHTML = "";
+    var rows = [{ label: "自分", list: ownDiscards, key: "self" }];
+    for (var j = 0; j < playerCount() - 1; j++) rows.push({ label: OPP_NAMES[j], list: oppDiscards[j], key: j });
+    rows.forEach(function (row) {
+      var div = document.createElement("div");
+      div.className = "row";
+      div.style.marginTop = "4px";
+      var name = document.createElement("span");
+      name.className = "note";
+      name.style.minWidth = "44px";
+      name.textContent = row.label + ":";
+      div.appendChild(name);
+      if (row.list.length === 0) {
+        var none = document.createElement("span");
+        none.className = "note"; none.textContent = "なし";
+        div.appendChild(none);
+      }
+      row.list.forEach(function (t, idx) {
+        var chip = document.createElement("span");
+        chip.className = "chip";
+        chip.appendChild(tileEl(Suzume.makeTile(t, false), true));
+        var x = document.createElement("span");
+        x.textContent = "✕";
+        chip.appendChild(x);
+        chip.addEventListener("click", function () { row.list.splice(idx, 1); lastAdvice = null; renderField(); });
+        div.appendChild(chip);
+      });
+      dl.appendChild(div);
     });
   }
 
@@ -304,6 +373,19 @@
   });
   document.getElementById("dealerChk").addEventListener("change", function () { lastAdvice = null; });
   document.getElementById("doraRedChk").addEventListener("change", function () { lastAdvice = null; renderPalettes(); });
+  document.getElementById("playerCountSel").addEventListener("change", function () { lastAdvice = null; renderField(); });
+
+  // 場の写真（参照表示のみ。自動認識はまだ無い）
+  var fieldPhotoURL = null;
+  document.getElementById("fieldPhotoInput").addEventListener("change", function (ev) {
+    var file = ev.target.files[0];
+    if (!file) return;
+    if (fieldPhotoURL) URL.revokeObjectURL(fieldPhotoURL);
+    fieldPhotoURL = URL.createObjectURL(file);
+    var img = document.getElementById("fieldPhotoImg");
+    img.src = fieldPhotoURL;
+    document.getElementById("fieldPhotoWrap").style.display = "block";
+  });
 
   function scoreBreakdownHtml(sc) {
     var parts = [];
@@ -342,20 +424,54 @@
           "役満・ボーナス内訳はスマホ側で確認。");
         return;
       }
+      // 危険牌予測（場の捨て牌から相手のロンを推定）
+      var dg = null;
+      try {
+        dg = Suzume.danger({
+          hand: hand, dora: o.dora, doraRed: o.doraRed, ownDiscards: ownDiscards.slice(),
+          opponents: opponentsState(), samples: 1500, seed: 20261112
+        });
+        if (dg && dg.error) dg = null;
+      } catch (e) { dg = null; }
+      function dangerText(d) {
+        if (!dg) return "";
+        var e = dg.byKey[Suzume.tileKey(d.discard)];
+        if (!e) return "";
+        if (e.level === "safe") return ' <span style="color:#1d7a3a"><b>安全（全員が捨てた牌＝全員フリテン）</b></span>';
+        var lv = e.level === "high" ? "高" : e.level === "mid" ? "中" : "低";
+        var safeNames = e.perOpponent.filter(function (p) { return p.furitenSafe; }).map(function (p) { return p.name; });
+        return ' <span class="' + (e.level === "high" ? "warn" : "") + '">危険度' + lv + ' 約' + Math.round(e.pAny * 100) + '%（想定損失 約' + e.expectedLoss.toFixed(1) + '点）' +
+          (safeNames.length ? '／' + safeNames.join("・") + 'には安全' : '') + '</span>';
+      }
       var html = "";
       if (res.score.shapeWin) {
         html += '<div class="warn">形は完成してるけど ' + res.score.total + ' 点で、あと ' + (5 - res.score.total) + ' 点足りないから今はアガれない。</div>';
       }
       html += '<div class="top">おすすめは「' + res.discards[0].discardLabel + '」切り</div><ol>';
       res.discards.slice(0, 4).forEach(function (d) {
-        html += '<li><b>' + d.discardLabel + ' を切る</b>' + (d.reasons.length ? ' — ' + d.reasons.join("／") : '') + '</li>';
+        html += '<li><b>' + d.discardLabel + ' を切る</b>' + (d.reasons.length ? ' — ' + d.reasons.join("／") : '') + dangerText(d) + '</li>';
       });
       html += '</ol>';
+      if (dg) {
+        var safest = null;
+        res.discards.forEach(function (d) {
+          var e = dg.byKey[Suzume.tileKey(d.discard)];
+          if (e && (!safest || e.pAny < safest.e.pAny)) safest = { d: d, e: e };
+        });
+        var topE = dg.byKey[Suzume.tileKey(res.discards[0].discard)];
+        if (safest && topE && safest.d !== res.discards[0] && safest.e.pAny < topE.pAny - 0.03) {
+          html += '<div class="note">守るなら「' + safest.d.discardLabel + '」切りが一番安全（危険度 約' + Math.round(safest.e.pAny * 100) + '%）。おすすめ手の危険度は 約' + Math.round(topE.pAny * 100) + '% だよ。</div>';
+        }
+        html += '<div class="note">危険度は場の見え牌から推定した近似（相手' + opponentsState().length + '人の手を各1500回サンプリング）。捨て牌が増えるほど精度が上がる。</div>';
+      }
       adviceEl.innerHTML = html;
       var top = res.discards[0];
+      var topDanger = dg ? dg.byKey[Suzume.tileKey(top.discard)] : null;
       setHUD(top.discardLabel, "切る牌",
         top.reasons.slice(0, 2).join("<br>") || "一番前進する切り方。",
-        top.tenpai ? "テンパイ。待ちの残り枚数はスマホ側で。" : "まだテンパイじゃない。有効牌を引くまで粘る形。");
+        topDanger ? (topDanger.level === "safe" ? "この牌は全員に安全（フリテン）。" :
+          "危険度 " + (topDanger.level === "high" ? "高" : topDanger.level === "mid" ? "中" : "低") + " 約" + Math.round(topDanger.pAny * 100) + "%。詳細はスマホ側で。")
+          : (top.tenpai ? "テンパイ。待ちの残り枚数はスマホ側で。" : "まだテンパイじゃない。有効牌を引くまで粘る形。"));
       return;
     }
 

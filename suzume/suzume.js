@@ -334,6 +334,123 @@
     return { win: false, score: handScore, discards: discards };
   }
 
+  // ---------- 危険牌予測（相手のロン確率） ----------
+  // 前提: 相手の手牌は見えないので、場に見えている牌（自分の手牌・ドラ表示・全員の捨て牌）を
+  // 差し引いた残り山から、相手の5枚をモンテカルロでサンプリングして
+  // 「この牌を切ると、その相手が何点でアガれる手になっている確率」を数える。
+  // 相手ごとに独立にサンプリングする近似（相手同士の手牌の重なりは無視）。
+  // フリテン（相手が既に捨てた牌種）は、その相手には確率0で確定。
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function fullTileSet() {
+    var tiles = [];
+    TYPES.forEach(function (t) {
+      if (isNumber(t)) { tiles.push(makeTile(t, true), makeTile(t, false), makeTile(t, false), makeTile(t, false)); }
+      else if (t === "C") { tiles.push(makeTile(t, true), makeTile(t, true), makeTile(t, true), makeTile(t, true)); }
+      else { tiles.push(makeTile(t, false), makeTile(t, false), makeTile(t, false), makeTile(t, false)); }
+    });
+    return tiles;
+  }
+
+  // pool から1枚取り除く。preferRed=true なら赤を、false なら通常を優先（無ければもう一方）
+  function removeFromPool(pool, t, preferRed) {
+    var idx = -1, fallback = -1;
+    for (var i = 0; i < pool.length; i++) {
+      if (pool[i].t !== t) continue;
+      if (fallback < 0) fallback = i;
+      if (isRed(pool[i]) === preferRed) { idx = i; break; }
+    }
+    if (idx < 0) idx = fallback;
+    if (idx >= 0) pool.splice(idx, 1);
+    return idx >= 0;
+  }
+
+  function buildPool(opts) {
+    var pool = fullTileSet();
+    (opts.hand || []).forEach(function (tile) { removeFromPool(pool, tile.t, isRed(tile)); });
+    if (opts.dora) removeFromPool(pool, opts.dora, !!opts.doraRed);
+    (opts.ownDiscards || []).forEach(function (t) { removeFromPool(pool, t, false); });
+    (opts.opponents || []).forEach(function (op) {
+      (op.discards || []).forEach(function (t) { removeFromPool(pool, t, false); });
+    });
+    (opts.visible || []).forEach(function (tile) { removeFromPool(pool, tile.t, isRed(tile)); });
+    return pool;
+  }
+
+  function danger(opts) {
+    opts = opts || {};
+    var samples = opts.samples || 1500;
+    var rand = mulberry32(opts.seed || 1234);
+    var pool = buildPool(opts);
+    var opponents = opts.opponents || [];
+    // 候補は手牌の実物（赤かどうかも含めて区別）
+    var candByKey = {}, candKeys = [];
+    (opts.hand || []).forEach(function (tile) {
+      var k = tileKey(tile);
+      if (!candByKey[k]) { candByKey[k] = tile; candKeys.push(k); }
+    });
+    var stats = {}; // key -> {perOpp: [{hits, scoreSum}], }
+    candKeys.forEach(function (k) { stats[k] = []; });
+
+    if (pool.length < 5 || opponents.length === 0) {
+      return { error: "場の情報が不足（残り山が5枚未満 or 相手未設定）", byKey: {}, candidates: [] };
+    }
+
+    opponents.forEach(function (op, oi) {
+      var furiten = {};
+      (op.discards || []).forEach(function (t) { furiten[t] = true; });
+      var hits = {}, scoreSum = {};
+      candKeys.forEach(function (k) { hits[k] = 0; scoreSum[k] = 0; });
+      for (var s = 0; s < samples; s++) {
+        // pool から重複なしで5枚サンプリング（部分 Fisher-Yates）
+        var idxs = pool.map(function (_, i) { return i; });
+        var hand5 = [];
+        for (var d = 0; d < 5; d++) {
+          var j = d + Math.floor(rand() * (idxs.length - d));
+          var tmp = idxs[d]; idxs[d] = idxs[j]; idxs[j] = tmp;
+          hand5.push(pool[idxs[d]]);
+        }
+        for (var c = 0; c < candKeys.length; c++) {
+          var k = candKeys[c], tile = candByKey[k];
+          if (furiten[tile.t]) continue;
+          var sc = scoreHand(hand5.concat([tile]), { dora: opts.dora || null });
+          if (sc.win) { hits[k]++; scoreSum[k] += sc.total; }
+        }
+      }
+      candKeys.forEach(function (k) {
+        stats[k].push({
+          name: op.name || ("相手" + (oi + 1)),
+          prob: hits[k] / samples,
+          avgScore: hits[k] ? scoreSum[k] / hits[k] : 0,
+          furitenSafe: !!furiten[candByKey[k].t]
+        });
+      });
+    });
+
+    var byKey = {}, candidates = [];
+    candKeys.forEach(function (k) {
+      var per = stats[k];
+      var pStay = 1, expLoss = 0, allFuriten = per.every(function (p) { return p.furitenSafe; });
+      per.forEach(function (p) { pStay *= (1 - p.prob); expLoss += p.prob * p.avgScore; });
+      var entry = {
+        tile: candByKey[k], key: k, label: tileLabel(candByKey[k]),
+        perOpponent: per, pAny: 1 - pStay, expectedLoss: expLoss, allFuritenSafe: allFuriten
+      };
+      entry.level = allFuriten ? "safe" : entry.pAny >= 0.25 ? "high" : entry.pAny >= 0.12 ? "mid" : "low";
+      byKey[k] = entry; candidates.push(entry);
+    });
+    candidates.sort(function (a, b) { return b.pAny - a.pAny; });
+    return { byKey: byKey, candidates: candidates, poolCount: pool.length, samples: samples };
+  }
+
   function advise(tiles, opts) {
     if (tiles.length === 6) return Object.assign({ mode: "six" }, analyzeSix(tiles, opts));
     if (tiles.length === 5) return Object.assign({ mode: "five" }, analyzeFive(tiles, opts));
@@ -345,7 +462,7 @@
     makeTile: makeTile, isNumber: isNumber, isRed: isRed,
     isTerminalOrHonor: isTerminalOrHonor, tileKey: tileKey, tileLabel: tileLabel, typeLabel: typeLabel,
     validate: validate, scoreHand: scoreHand, analyzeFive: analyzeFive, analyzeSix: analyzeSix,
-    advise: advise, remainingCounts: remainingCounts
+    advise: advise, remainingCounts: remainingCounts, danger: danger, buildPool: buildPool
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   global.Suzume = api;
