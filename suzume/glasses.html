@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=600, initial-scale=1">
+<title>すずめ雀ヘルパー 新米版（Ray-Ban Display / 600×600）</title>
+<style>
+  /* 新米（Ray-Ban Display）Web Apps 向け: 600×600固定・右眼単眼・D-pad操作。
+     暗部は透明になる表示方式なので、細線を避けて太い文字と面で読ませる。 */
+  :root { --cy:#57f7ff; --amber:#ffb02e; --red:#ff6b5e; --green:#3dff8e; --tx:#f2feff; --dim:#9fd8de; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { width:600px; height:600px; overflow:hidden; background:#000; }
+  body { font-family:-apple-system,"Hiragino Sans",sans-serif; color:var(--tx); }
+  #app { width:600px; height:600px; display:flex; flex-direction:column; padding:18px 20px; }
+  .topbar { display:flex; justify-content:space-between; align-items:baseline; border-bottom:3px solid var(--cy); padding-bottom:8px; }
+  .topbar .sys { font-size:17px; letter-spacing:.18em; color:var(--cy); font-weight:700; }
+  .topbar .step { font-size:19px; color:var(--dim); }
+  .title { font-size:30px; font-weight:800; letter-spacing:.06em; margin:14px 0 4px; color:#fff; }
+  .hint { font-size:19px; color:var(--dim); line-height:1.45; }
+  .grid { display:grid; gap:10px; margin-top:14px; }
+  .cell { border:3px solid rgba(87,247,255,.45); background:rgba(10,30,36,.85); color:var(--tx);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; min-height:74px; }
+  .cell .g { font-size:36px; font-weight:800; line-height:1.1; }
+  .cell .s { font-size:14px; color:var(--dim); letter-spacing:.1em; }
+  .cell.red .g { color:var(--red); }
+  .cell.honH .g { color:var(--green); }
+  .cell.honC .g { color:var(--red); }
+  .cell.off { opacity:.28; }
+  .cell.focus { border-color:var(--amber); box-shadow:0 0 0 3px var(--amber), 0 0 18px rgba(255,176,46,.5); background:rgba(60,42,4,.9); }
+  .cell.selMark { border-color:var(--cy); background:rgba(0,70,84,.9); }
+  .btnrow { display:flex; gap:10px; margin-top:14px; }
+  .btn { flex:1; border:3px solid rgba(87,247,255,.45); background:rgba(10,30,36,.85); color:var(--tx);
+    font-size:22px; font-weight:700; padding:14px 6px; text-align:center; cursor:pointer; }
+  .btn.primary { background:var(--cy); color:#03222a; border-color:var(--cy); }
+  .btn.focus { border-color:var(--amber); box-shadow:0 0 0 3px var(--amber), 0 0 18px rgba(255,176,46,.5); }
+  .btn.off { opacity:.3; }
+  .handrow { display:flex; gap:8px; align-items:center; min-height:86px; margin-top:12px;
+    border:3px solid rgba(87,247,255,.45); padding:8px 10px; background:rgba(4,14,18,.9); }
+  .htile { width:64px; height:80px; border:3px solid rgba(87,247,255,.6); display:flex; align-items:center; justify-content:center;
+    font-size:38px; font-weight:800; background:rgba(10,30,36,.9); }
+  .htile.red { color:var(--red); border-color:rgba(255,107,94,.7); }
+  .htile.honH { color:var(--green); }
+  .htile.honC { color:var(--red); }
+  .handempty { font-size:20px; color:var(--dim); }
+  .count { font-size:20px; color:var(--dim); margin-left:auto; }
+  /* 結果画面 */
+  .bigTile { font-size:110px; font-weight:800; text-align:center; line-height:1.15; color:var(--cy);
+    text-shadow:0 0 24px rgba(87,247,255,.6); margin:8px 0 2px; }
+  .bigTile.red { color:var(--red); text-shadow:0 0 24px rgba(255,83,71,.6); }
+  .bigLabel { font-size:24px; text-align:center; color:var(--amber); letter-spacing:.3em; font-weight:700; }
+  .reasons { font-size:23px; line-height:1.55; margin-top:14px; }
+  .reasons div { margin:6px 0; }
+  .sub2 { font-size:20px; color:var(--dim); margin-top:10px; line-height:1.5; }
+  .winText { font-size:64px; font-weight:800; text-align:center; color:var(--red); margin-top:26px;
+    text-shadow:0 0 24px rgba(255,83,71,.6); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="suzume.js"></script>
+<script>
+(function () {
+  var S = {
+    step: 0,               // 0:ドラ 1:手牌 2:結果
+    dora: null, doraRed: false, dealer: false,
+    hand: [],
+    focus: 0
+  };
+  var app = document.getElementById("app");
+  var items = [];          // 現在画面のフォーカス可能要素 [{el, cols, action, enabled}]
+
+  function tileGlyph(tile) { return Suzume.tileLabel(tile); }
+  function tileCls(tile) {
+    if (tile.t === "H") return "honH";
+    if (tile.t === "C") return "honC";
+    if (Suzume.isRed(tile)) return "red";
+    return "";
+  }
+
+  // ---------- 汎用フォーカス移動 ----------
+  function setFocus(i) {
+    items.forEach(function (it, k) { it.el.classList.toggle("focus", k === i && it.enabled !== false); });
+    S.focus = i;
+  }
+  function move(dir) {
+    if (!items.length) return;
+    var cols = items[0].cols || 1;
+    var i = S.focus, n = items.length, j = i;
+    if (dir === "left") j = i - 1;
+    if (dir === "right") j = i + 1;
+    if (dir === "up") j = i - cols;
+    if (dir === "down") j = i + cols;
+    if (j < 0 || j >= n) return;
+    // 無効セルはスキップ（同方向に進む）
+    var guard = 0;
+    while (items[j].enabled === false && guard++ < n) {
+      if (dir === "left") j--; if (dir === "right") j++;
+      if (dir === "up") j -= cols; if (dir === "down") j += cols;
+      if (j < 0 || j >= n) return;
+    }
+    if (items[j].enabled === false) return;
+    setFocus(j);
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowLeft") { move("left"); e.preventDefault(); }
+    else if (e.key === "ArrowRight") { move("right"); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { move("up"); e.preventDefault(); }
+    else if (e.key === "ArrowDown") { move("down"); e.preventDefault(); }
+    else if (e.key === "Enter") { var it = items[S.focus]; if (it && it.enabled !== false) it.action(); e.preventDefault(); }
+    else if (e.key === "Escape" || e.key === "Backspace") { back(); e.preventDefault(); }
+  });
+  function back() {
+    if (S.step === 2) { S.step = 1; render(); }
+    else if (S.step === 1) { S.step = 0; render(); }
+  }
+  function mkCell(parent, glyph, sub, cls, enabled, action, selMark) {
+    var d = document.createElement("div");
+    d.className = "cell " + (cls || "") + (enabled === false ? " off" : "") + (selMark ? " selMark" : "");
+    d.innerHTML = '<div class="g">' + glyph + '</div>' + (sub ? '<div class="s">' + sub + '</div>' : '');
+    d.addEventListener("click", function () { if (enabled !== false) action(); });
+    parent.appendChild(d);
+    items.push({ el: d, cols: currentCols, enabled: enabled !== false, action: action });
+    return d;
+  }
+  function mkBtn(parent, label, primary, enabled, action) {
+    var d = document.createElement("div");
+    d.className = "btn" + (primary ? " primary" : "") + (enabled === false ? " off" : "");
+    d.textContent = label;
+    d.addEventListener("click", function () { if (enabled !== false) action(); });
+    parent.appendChild(d);
+    items.push({ el: d, cols: currentCols, enabled: enabled !== false, action: action });
+    return d;
+  }
+  var currentCols = 1;
+
+  function topbar(stepLabel) {
+    return '<div class="topbar"><span class="sys">SUZUME ASSIST</span><span class="step">' + stepLabel + '</span></div>';
+  }
+
+  // ---------- STEP 0: ドラ ----------
+  function canRed(t) {
+    // その数字の赤が場に残っているか（ドラ表示が赤なら残らない）
+    if (!Suzume.isNumber(t)) return false;
+    if (S.doraRed && S.dora === t) return false;
+    if (S.hand.some(function (x) { return x.t === t && x.red; })) return false;
+    return true;
+  }
+  function renderDora() {
+    items = []; currentCols = 4;
+    var html = topbar("1 / 3 ドラ設定") +
+      '<div class="title">ドラ表示牌は？</div>' +
+      '<div class="hint">矢印で選んで Enter。ドラは表示牌そのもの。</div>';
+    app.innerHTML = html;
+    var grid = document.createElement("div");
+    grid.className = "grid"; grid.style.gridTemplateColumns = "repeat(4,1fr)";
+    app.appendChild(grid);
+    mkCell(grid, "なし", "未設定", "", true, function () { S.dora = null; S.doraRed = false; render(); }, S.dora === null);
+    Suzume.TYPES.forEach(function (t) {
+      var tile = Suzume.makeTile(t, false);
+      mkCell(grid, Suzume.typeLabel(t), t === "H" ? "ハツ" : t === "C" ? "チュン" : "ソーズ",
+        t === "H" ? "honH" : t === "C" ? "honC" : "", true,
+        function () { S.dora = t; if (!Suzume.isNumber(t)) S.doraRed = false; render(); }, S.dora === t);
+    });
+    var row = document.createElement("div"); row.className = "btnrow"; app.appendChild(row);
+    currentCols = 3;
+    mkBtn(row, "表示牌が赤: " + (S.doraRed ? "ON" : "OFF"), false,
+      !!(S.dora && Suzume.isNumber(S.dora)),
+      function () { S.doraRed = !S.doraRed; render(); });
+    mkBtn(row, "親: " + (S.dealer ? "ON" : "OFF"), false, true,
+      function () { S.dealer = !S.dealer; render(); });
+    mkBtn(row, "手牌入力へ →", true, true, function () { S.step = 1; render(); });
+    setFocus(S.focus < items.length ? S.focus : 0);
+  }
+
+  // ---------- STEP 1: 手牌 ----------
+  function countType(t) { return S.hand.filter(function (x) { return x.t === t; }).length; }
+  function renderHand() {
+    items = []; currentCols = 5;
+    var html = topbar("2 / 3 手牌入力") +
+      '<div class="title">手牌（' + S.hand.length + ' / 6枚）</div>';
+    app.innerHTML = html;
+    var hr = document.createElement("div"); hr.className = "handrow";
+    if (S.hand.length === 0) hr.innerHTML = '<span class="handempty">下から牌を選んで追加</span>';
+    S.hand.forEach(function (tile) {
+      var d = document.createElement("div");
+      d.className = "htile " + tileCls(tile);
+      d.textContent = tileGlyph(tile);
+      hr.appendChild(d);
+    });
+    var c = document.createElement("span"); c.className = "count";
+    c.textContent = S.dora ? "ドラ " + (S.doraRed && Suzume.isNumber(S.dora) ? "赤" : "") + Suzume.typeLabel(S.dora) : "";
+    hr.appendChild(c);
+    app.appendChild(hr);
+    var grid = document.createElement("div");
+    grid.className = "grid"; grid.style.gridTemplateColumns = "repeat(5,1fr)";
+    app.appendChild(grid);
+    function addCell(t, red) {
+      var tile = Suzume.makeTile(t, red);
+      var enabled = S.hand.length < 6 && countType(t) < 4 && (!red || canRed(t));
+      if (t === "C") enabled = S.hand.length < 6 && countType(t) < 4;
+      mkCell(grid, Suzume.tileLabel(tile), red ? "赤" : (t === "H" ? "ハツ" : t === "C" ? "チュン" : ""),
+        tileCls(tile), enabled,
+        function () { S.hand.push(Suzume.makeTile(t, red)); render(); });
+    }
+    ["1","2","3","4","5"].forEach(function (t) { addCell(t, false); });
+    ["6","7","8","9"].forEach(function (t) { addCell(t, false); });
+    addCell("H", false);
+    ["1","2","3","4","5"].forEach(function (t) { addCell(t, true); });
+    ["6","7","8","9"].forEach(function (t) { addCell(t, true); });
+    addCell("C", true);
+    var row = document.createElement("div"); row.className = "btnrow"; app.appendChild(row);
+    currentCols = 3;
+    mkBtn(row, "← 戻す", false, S.hand.length > 0, function () { S.hand.pop(); render(); });
+    mkBtn(row, "ドラ設定へ", false, true, function () { S.step = 0; render(); });
+    mkBtn(row, "助言 →", true, S.hand.length === 5 || S.hand.length === 6,
+      function () { S.step = 2; render(); });
+    setFocus(Math.min(S.focus, items.length - 1));
+  }
+
+  // ---------- STEP 2: 結果 ----------
+  function opts() {
+    return { dora: S.dora, doraRed: S.doraRed, dealer: S.dealer, ownDiscards: [] };
+  }
+  function renderResult() {
+    items = []; currentCols = 2;
+    var res = Suzume.advise(S.hand, opts());
+    var html = topbar("3 / 3 アドバイス");
+    if (res.mode === "six" && res.win) {
+      html += '<div class="winText">アガリ！</div>' +
+        '<div class="bigTile">' + res.score.finalScore + '点</div>' +
+        '<div class="sub2" style="text-align:center">' +
+        res.score.sets.map(function (s) { return s.desc; }).join(" ＋ ") +
+        (res.score.yakuman ? '<br>役満「' + res.score.yakuman.name + '」' : '') + '</div>';
+    } else if (res.mode === "six") {
+      var top = res.discards[0];
+      html += '<div class="bigLabel">切る牌</div>' +
+        '<div class="bigTile ' + (Suzume.isRed(top.discard) ? "red" : "") + '">' + top.discardLabel + '</div>' +
+        '<div class="reasons">' + top.reasons.slice(0, 2).map(function (r) { return '<div>' + r + '</div>'; }).join("") + '</div>' +
+        (res.discards[1] ? '<div class="sub2">次点: ' + res.discards[1].discardLabel + '切り</div>' : '');
+    } else if (res.mode === "five" && res.isTenpai) {
+      html += '<div class="bigLabel">テンパイ</div>' +
+        '<div class="bigTile">' + res.waits.map(function (w) { return w.label; }).join("・") + '</div>' +
+        '<div class="reasons"><div>待ち 合計' + res.totalWaitTiles + '枚</div><div>アガれば最大 ' + res.maxScore + '点</div></div>';
+    } else if (res.mode === "five") {
+      html += '<div class="bigLabel">まだテンパイじゃない</div>' +
+        (res.improvements && res.improvements.length
+          ? '<div class="reasons"><div>引くと前進: ' + res.improvements.slice(0, 4).map(function (x) { return x.label; }).join("・") + '</div>' +
+            '<div>有効牌 合計' + res.improvements.reduce(function (s, x) { return s + x.remaining; }, 0) + '枚</div></div>'
+          : '<div class="reasons"><div>有効牌なし</div></div>');
+    } else {
+      html += '<div class="reasons"><div>手牌は5枚か6枚で入れてね</div></div>';
+    }
+    app.innerHTML = html;
+    var row = document.createElement("div"); row.className = "btnrow"; app.appendChild(row);
+    mkBtn(row, "← 手牌を直す", false, true, function () { S.step = 1; render(); });
+    mkBtn(row, "最初から", true, true, function () {
+      S.hand = []; S.step = 0; S.focus = 0; render();
+    });
+    setFocus(0);
+  }
+
+  function render() {
+    if (S.step === 0) renderDora();
+    else if (S.step === 1) renderHand();
+    else renderResult();
+  }
+  render();
+})();
+</script>
+</body>
+</html>
